@@ -195,6 +195,7 @@
     padding: 10px 12px 8px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    position: relative;
   }
 
   .platform-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -212,15 +213,40 @@
     flex: 1;
   }
 
-  /* Inline colour swatches in card header */
+  /* Colour dot button — shows current card colour */
+  .colour-dot {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,0,0,0.18);
+    background: #fff;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    transition: transform 0.12s, box-shadow 0.12s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .colour-dot:hover { transform: scale(1.18); box-shadow: 0 0 0 3px rgba(0,0,0,0.08); }
+  .colour-dot:focus { outline: none; box-shadow: 0 0 0 3px rgba(0,0,0,0.12); }
+
+  /* Colour dropdown — fixed popup so it escapes card overflow */
+  .colour-strip {
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 6px 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+    z-index: 1001;
+    display: flex;
+    width: auto;
+  }
   .colour-swatches {
     display: flex;
-    gap: 5px;
+    gap: 6px;
     align-items: center;
-    flex-shrink: 0;
   }
   .swatch {
-    width: 13px; height: 13px;
+    width: 16px; height: 16px;
     border-radius: 50%;
     border: 2px solid transparent;
     cursor: pointer;
@@ -231,7 +257,7 @@
   }
   .swatch:hover { transform: scale(1.25); }
   .swatch.active { border-color: var(--text) !important; }
-  .swatch[data-c=""]       { background: #e5e5e5; border-color: #ccc !important; }
+  .swatch[data-c=""]     { background: #fff; border-color: var(--border-strong) !important; }
   .swatch[data-c="yellow"] { background: #f59e0b; }
   .swatch[data-c="pink"]   { background: #ec4899; }
   .swatch[data-c="blue"]   { background: #3b82f6; }
@@ -479,6 +505,29 @@ function getTitle() {
   return titleInput.value.trim() || 'My Board';
 }
 
+/* ── State ── */
+function saveState() {
+  const data = {
+    title: getTitle(),
+    cards: cards.map(c => c.type === 'text'
+      ? { type: 'text', text: c.text || '', x: c.x, y: c.y, color: c.color || '' }
+      : { type: 'link', url: c.url, x: c.x, y: c.y, note: c.note || '', color: c.color || '' }
+    )
+  };
+  try {
+    const enc = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+    history.replaceState(null, '', '#' + enc);
+    document.title = getTitle() + ' · Link Board';
+  } catch(e) {}
+}
+
+function loadState() {
+  const hash = location.hash.slice(1);
+  if (!hash) return null;
+  try { return JSON.parse(decodeURIComponent(escape(atob(hash)))); }
+  catch { return null; }
+}
+
 function updateEmpty() {
   emptyState.style.display = cards.length === 0 ? 'block' : 'none';
 }
@@ -499,13 +548,25 @@ function applyColour(el, cardData, colour) {
   COLOURS.forEach(c => { if (c) el.classList.remove('c-' + c); });
   cardData.color = colour;
   if (colour) el.classList.add('c-' + colour);
-  el.querySelectorAll('.colour-swatches .swatch').forEach(s => {
-    s.classList.toggle('active', s.dataset.c === colour);
-  });
+  const dot = el.querySelector('.colour-dot');
+  if (dot) {
+    dot.style.background = colour ? COLOUR_HEX[colour] : '#fff';
+    dot.style.borderColor = colour ? COLOUR_HEX[colour] : 'rgba(0,0,0,0.18)';
+  }
+  const strip = el.querySelector('.colour-strip');
+  if (strip) {
+    strip.querySelectorAll('.swatch').forEach(s => {
+      s.classList.toggle('active', s.dataset.c === colour);
+    });
+  }
 }
 
 function makeColourStrip(cardData, el) {
-  const swatches = el.querySelector('.colour-swatches');
+  const strip = document.createElement('div');
+  strip.className = 'colour-strip';
+  strip.hidden = true;
+  strip.innerHTML = `<div class="colour-swatches"></div>`;
+  const swatches = strip.querySelector('.colour-swatches');
   COLOURS.forEach(c => {
     const btn = document.createElement('button');
     btn.className = 'swatch' + (cardData.color === c ? ' active' : '');
@@ -516,10 +577,13 @@ function makeColourStrip(cardData, el) {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       applyColour(el, cardData, c);
+      strip.hidden = true;
       saveState();
     });
     swatches.appendChild(btn);
   });
+  document.body.appendChild(strip);
+  return strip;
 }
 
 /* ── Drag logic ── */
@@ -613,7 +677,7 @@ function makeCard(url, x, y, note, color) {
     <div class="card-header">
       <span class="platform-dot dot-${p}"></span>
       <span class="platform-label">${platformLabel(p)}</span>
-      <div class="colour-swatches"></div>
+      <button class="colour-dot" title="Card colour"></button>
       <button class="delete-btn" aria-label="Remove card">&times;</button>
     </div>
     <div class="card-note">
@@ -638,9 +702,26 @@ function makeCard(url, x, y, note, color) {
 
   const cardData = { id, type: 'link', url, x, y, note, color, el };
 
-  makeColourStrip(cardData, el);
+  const colourStrip = makeColourStrip(cardData, el);
 
   if (color) applyColour(el, cardData, color);
+
+  el.querySelector('.colour-dot').addEventListener('click', e => {
+    e.stopPropagation();
+    const isHidden = colourStrip.hidden;
+    // Close all other strips first
+    document.querySelectorAll('.colour-strip').forEach(s => { s.hidden = true; });
+    if (isHidden) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      colourStrip.hidden = false;
+      // Position below the dot, right-aligned to it
+      const stripW = colourStrip.offsetWidth;
+      colourStrip.style.top  = (rect.bottom + 6) + 'px';
+      colourStrip.style.left = Math.max(4, rect.right - stripW) + 'px';
+    }
+  });
+  el.querySelector('.colour-dot').addEventListener('mousedown', e => e.stopPropagation());
+  el.querySelector('.colour-dot').addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
 
   textarea.addEventListener('input', () => {
     cardData.note = textarea.value;
@@ -656,6 +737,7 @@ function makeCard(url, x, y, note, color) {
   el.querySelector('.delete-btn').addEventListener('click', e => {
     e.stopPropagation();
     cards = cards.filter(c => c.id !== id);
+    colourStrip.remove();
     el.remove();
     updateEmpty();
     updateCanvasSize();
@@ -687,7 +769,7 @@ function makeTextCard(text, x, y, color) {
     <div class="card-header">
       <span class="platform-dot dot-text"></span>
       <span class="platform-label">Note</span>
-      <div class="colour-swatches"></div>
+      <button class="colour-dot" title="Card colour"></button>
       <button class="delete-btn" aria-label="Remove card">&times;</button>
     </div>
     <div class="text-body">
@@ -706,9 +788,24 @@ function makeTextCard(text, x, y, color) {
 
   const cardData = { id, type: 'text', text, x, y, color, el };
 
-  makeColourStrip(cardData, el);
+  const colourStrip = makeColourStrip(cardData, el);
 
   if (color) applyColour(el, cardData, color);
+
+  el.querySelector('.colour-dot').addEventListener('click', e => {
+    e.stopPropagation();
+    const isHidden = colourStrip.hidden;
+    document.querySelectorAll('.colour-strip').forEach(s => { s.hidden = true; });
+    if (isHidden) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      colourStrip.hidden = false;
+      const stripW = colourStrip.offsetWidth;
+      colourStrip.style.top  = (rect.bottom + 6) + 'px';
+      colourStrip.style.left = Math.max(4, rect.right - stripW) + 'px';
+    }
+  });
+  el.querySelector('.colour-dot').addEventListener('mousedown', e => e.stopPropagation());
+  el.querySelector('.colour-dot').addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
 
   contentEl.addEventListener('input', () => { cardData.text = contentEl.value; autoResize(); saveState(); });
   contentEl.addEventListener('mousedown', e => e.stopPropagation());
@@ -717,6 +814,7 @@ function makeTextCard(text, x, y, color) {
   el.querySelector('.delete-btn').addEventListener('click', e => {
     e.stopPropagation();
     cards = cards.filter(c => c.id !== id);
+    colourStrip.remove();
     el.remove();
     updateEmpty();
     updateCanvasSize();
@@ -791,107 +889,31 @@ clearBtn.addEventListener('click', () => {
   cards = [];
   updateEmpty();
   updateCanvasSize();
-  saveState();
+  history.replaceState(null, '', location.pathname);
 });
 
-updateEmpty();
-updateCanvasSize();
-</script>
-
-<!-- ============================================================
-  FIREBASE — paste your config below, then save and upload to GitHub
-  Get your config from: Firebase Console → your project → Project Settings → Your apps
-  ============================================================ -->
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {
-  getFirestore,
-  doc,
-  setDoc,
-  getDoc,
-  onSnapshot
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-// ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE ▼▼▼
-const firebaseConfig = {
-  apiKey: "AIzaSyDrjoXhHTxTyX3YI0XQ5hEqNHpOsVZ58qo",
-  authDomain: "refs-and.firebaseapp.com",
-  projectId: "refs-and",
-  storageBucket: "refs-and.firebasestorage.app",
-  messagingSenderId: "485568613975",
-  appId: "1:485568613975:web:537fd4bda717a60e2a9d12",
-  measurementId: "G-98SXP1ZRK2"
-};
-// ▲▲▲ END OF CONFIG ▲▲▲
-
-const app = initializeApp(firebaseConfig);
-const db  = getFirestore(app);
-
-/* ── Board ID from URL (creates one if new) ── */
-const params  = new URLSearchParams(location.search);
-let boardId   = params.get('board');
-if (!boardId) {
-  boardId = crypto.randomUUID();
-  params.set('board', boardId);
-  history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
-}
-
-/* ── Save to Firestore ── */
-window.saveState = async function saveState() {
-  const data = {
-    title: (document.getElementById('board-title').value.trim()) || 'My Board',
-    cards: window._cards.map(c =>
-      c.type === 'text'
-        ? { type: 'text',  text: c.text  || '', x: c.x, y: c.y, color: c.color || '' }
-        : { type: 'link',  url:  c.url,          x: c.x, y: c.y, note: c.note  || '', color: c.color || '' }
-    )
-  };
-  try {
-    await setDoc(doc(db, "boards", boardId), data);
-  } catch(e) {
-    console.error("Firebase save error:", e);
+/* ── Load from hash ── */
+const saved = loadState();
+if (saved) {
+  if (saved.title) {
+    titleInput.value = saved.title;
+    document.title = saved.title + ' · Link Board';
   }
-};
-
-/* ── Load & live-sync from Firestore ── */
-const titleInput = document.getElementById('board-title');
-
-onSnapshot(doc(db, "boards", boardId), (snap) => {
-  if (!snap.exists()) return;
-  const data = snap.data();
-
-  // Clear existing cards from DOM
-  if (window._cards) {
-    window._cards.forEach(c => c.el && c.el.remove());
-    window._cards = [];
-  }
-
-  if (data.title) {
-    titleInput.value = data.title;
-    document.title = data.title + ' · Link Board';
-  }
-
-  if (data.cards) {
-    data.cards.forEach(d => {
-      if (d.type === 'text') {
-        makeTextCard(d.text, d.x, d.y, d.color);
-      } else {
-        makeCard(d.url, d.x, d.y, d.note, d.color);
+  if (saved.cards && saved.cards.length > 0) {
+    saved.cards.forEach(d => {
+      if (!d.type || d.type === 'link') {
+        addCard(d.url, d.x, d.y, d.note, d.color);
+      } else if (d.type === 'text') {
+        addTextCard(d.text, d.x, d.y, d.color);
       }
     });
+  } else {
+    updateEmpty();
   }
-
+} else {
   updateEmpty();
-  updateCanvasSize();
-});
-
-// Expose cards array so saveState above can read it
-// (the main script uses `cards`, so we mirror it)
-Object.defineProperty(window, '_cards', {
-  get: () => cards,
-  set: (v) => { cards = v; }
-});
-
+}
+updateCanvasSize();
 </script>
 </body>
 </html>
