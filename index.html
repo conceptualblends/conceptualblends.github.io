@@ -479,29 +479,6 @@ function getTitle() {
   return titleInput.value.trim() || 'My Board';
 }
 
-/* ── State ── */
-function saveState() {
-  const data = {
-    title: getTitle(),
-    cards: cards.map(c => c.type === 'text'
-      ? { type: 'text', text: c.text || '', x: c.x, y: c.y, color: c.color || '' }
-      : { type: 'link', url: c.url, x: c.x, y: c.y, note: c.note || '', color: c.color || '' }
-    )
-  };
-  try {
-    const enc = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
-    history.replaceState(null, '', '#' + enc);
-    document.title = getTitle() + ' · Link Board';
-  } catch(e) {}
-}
-
-function loadState() {
-  const hash = location.hash.slice(1);
-  if (!hash) return null;
-  try { return JSON.parse(decodeURIComponent(escape(atob(hash)))); }
-  catch { return null; }
-}
-
 function updateEmpty() {
   emptyState.style.display = cards.length === 0 ? 'block' : 'none';
 }
@@ -814,31 +791,106 @@ clearBtn.addEventListener('click', () => {
   cards = [];
   updateEmpty();
   updateCanvasSize();
-  history.replaceState(null, '', location.pathname);
+  saveState();
 });
 
-/* ── Load from hash ── */
-const saved = loadState();
-if (saved) {
-  if (saved.title) {
-    titleInput.value = saved.title;
-    document.title = saved.title + ' · Link Board';
+updateEmpty();
+updateCanvasSize();
+</script>
+
+<!-- ============================================================
+  FIREBASE — paste your config below, then save and upload to GitHub
+  Get your config from: Firebase Console → your project → Project Settings → Your apps
+  ============================================================ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE ▼▼▼
+const firebaseConfig = {
+  apiKey: "PASTE_YOUR_API_KEY",
+  authDomain: "PASTE_YOUR_AUTH_DOMAIN",
+  projectId: "PASTE_YOUR_PROJECT_ID",
+  storageBucket: "PASTE_YOUR_STORAGE_BUCKET",
+  messagingSenderId: "PASTE_YOUR_MESSAGING_SENDER_ID",
+  appId: "PASTE_YOUR_APP_ID"
+};
+// ▲▲▲ END OF CONFIG ▲▲▲
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+/* ── Board ID from URL (creates one if new) ── */
+const params  = new URLSearchParams(location.search);
+let boardId   = params.get('board');
+if (!boardId) {
+  boardId = crypto.randomUUID();
+  params.set('board', boardId);
+  history.replaceState(null, '', `${location.pathname}?${params.toString()}`);
+}
+
+/* ── Save to Firestore ── */
+window.saveState = async function saveState() {
+  const data = {
+    title: (document.getElementById('board-title').value.trim()) || 'My Board',
+    cards: window._cards.map(c =>
+      c.type === 'text'
+        ? { type: 'text',  text: c.text  || '', x: c.x, y: c.y, color: c.color || '' }
+        : { type: 'link',  url:  c.url,          x: c.x, y: c.y, note: c.note  || '', color: c.color || '' }
+    )
+  };
+  try {
+    await setDoc(doc(db, "boards", boardId), data);
+  } catch(e) {
+    console.error("Firebase save error:", e);
   }
-  if (saved.cards && saved.cards.length > 0) {
-    saved.cards.forEach(d => {
-      if (!d.type || d.type === 'link') {
-        addCard(d.url, d.x, d.y, d.note, d.color);
-      } else if (d.type === 'text') {
-        addTextCard(d.text, d.x, d.y, d.color);
+};
+
+/* ── Load & live-sync from Firestore ── */
+const titleInput = document.getElementById('board-title');
+
+onSnapshot(doc(db, "boards", boardId), (snap) => {
+  if (!snap.exists()) return;
+  const data = snap.data();
+
+  // Clear existing cards from DOM
+  if (window._cards) {
+    window._cards.forEach(c => c.el && c.el.remove());
+    window._cards = [];
+  }
+
+  if (data.title) {
+    titleInput.value = data.title;
+    document.title = data.title + ' · Link Board';
+  }
+
+  if (data.cards) {
+    data.cards.forEach(d => {
+      if (d.type === 'text') {
+        makeTextCard(d.text, d.x, d.y, d.color);
+      } else {
+        makeCard(d.url, d.x, d.y, d.note, d.color);
       }
     });
-  } else {
-    updateEmpty();
   }
-} else {
+
   updateEmpty();
-}
-updateCanvasSize();
+  updateCanvasSize();
+});
+
+// Expose cards array so saveState above can read it
+// (the main script uses `cards`, so we mirror it)
+Object.defineProperty(window, '_cards', {
+  get: () => cards,
+  set: (v) => { cards = v; }
+});
+
 </script>
 </body>
 </html>
