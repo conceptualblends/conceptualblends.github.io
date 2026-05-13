@@ -479,11 +479,6 @@ function getTitle() {
   return titleInput.value.trim() || 'My Board';
 }
 
-/* ── State ── */
-// saveState is overridden by the Firebase module below
-function saveState() {}
-function loadState() { return null; }
-
 function updateEmpty() {
   emptyState.style.display = cards.length === 0 ? 'block' : 'none';
 }
@@ -796,7 +791,7 @@ clearBtn.addEventListener('click', () => {
   cards = [];
   updateEmpty();
   updateCanvasSize();
-  history.replaceState(null, '', location.pathname);
+  saveState();
 });
 
 updateEmpty();
@@ -833,10 +828,10 @@ if (!boardId) {
   history.replaceState(null, '', location.pathname + '?' + params.toString());
 }
 
-// Flag so onSnapshot ignores our own saves and doesn't disrupt typing
+// Prevents onSnapshot rebuilding cards while YOU are typing (fixes focus loss)
 let localSaving = false;
 
-// Override the placeholder saveState with a real Firebase one
+// Override saveState with the real Firebase version
 window.saveState = async function () {
   localSaving = true;
   const data = {
@@ -844,7 +839,7 @@ window.saveState = async function () {
     cards: cards.map(c =>
       c.type === 'text'
         ? { type: 'text', text: c.text || '', x: c.x, y: c.y, color: c.color || '' }
-        : { type: 'link', url: c.url,         x: c.x, y: c.y, note: c.note || '', color: c.color || '' }
+        : { type: 'link', url: c.url,          x: c.x, y: c.y, note: c.note || '', color: c.color || '' }
     )
   };
   try {
@@ -855,15 +850,13 @@ window.saveState = async function () {
   setTimeout(() => { localSaving = false; }, 1500);
 };
 
-// Listen for changes — on first load this fires immediately and populates the board
-// On other devices it fires whenever someone else saves
+// Fires on page load (loads saved board) and when another device saves
 onSnapshot(doc(db, 'boards', boardId), (snap) => {
-  if (localSaving) return; // ignore echo of our own save
+  if (localSaving) return; // ignore echo of our own save — keeps focus/cursor intact
   if (!snap.exists()) return;
 
   const data = snap.data();
 
-  // Remove all existing cards
   cards.forEach(c => c.el && c.el.remove());
   cards = [];
 
